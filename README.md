@@ -1,2 +1,2 @@
-# bsc
-match token on binance smart chain
+# BMatch Token (MATCH)
+Smart Contract for BMatch token (MATCH) on Binance Smart Chain
