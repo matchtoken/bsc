@@ -1,4 +1,44 @@
-pragma solidity ^0.5.10;
+pragma solidity ^0.7.6;
+
+
+/* 
+   [̲̅S][̲̅O][̲̅C][̲̅C][̲̅E][̲̅R][̲̅C][̲̅R][̲̅Y][̲̅P][̲̅T]
+   
+   &
+
+   𝕄𝕒𝕥𝕔𝕙 𝕋𝕠𝕜𝕖𝕟 𝕋𝕖𝕒𝕞
+
+*/
+
+
+interface IBEP20 {
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address who) external view returns (uint256);
+
+    function allowance(address owner, address spender)
+    external view returns (uint256);
+
+    function transfer(address to, uint256 value) external returns (bool);
+
+    function approve(address spender, uint256 value)
+    external returns (bool);
+
+    function transferFrom(address from, address to, uint256 value)
+    external returns (bool);
+
+    event Transfer(
+        address indexed from,
+        address indexed to,
+        uint256 value
+    );
+
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 value
+    );
+}
 
 library SafeMath {
 
@@ -124,46 +164,7 @@ library SafeMath64 {
 
 }
 
-interface ITRC20 {
-    function totalSupply() external view returns (uint256);
-
-    function balanceOf(address who) external view returns (uint256);
-
-    function allowance(address owner, address spender)
-    external view returns (uint256);
-
-    function transfer(address to, uint256 value) external returns (bool);
-
-    function approve(address spender, uint256 value)
-    external returns (bool);
-
-    function transferFrom(address from, address to, uint256 value)
-    external returns (bool);
-
-    event Transfer(
-        address indexed from,
-        address indexed to,
-        uint256 value
-    );
-
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
-}
-
-/* 
-   [̲̅S][̲̅O][̲̅C][̲̅C][̲̅E][̲̅R][̲̅C][̲̅R][̲̅Y][̲̅P][̲̅T]
-   
-   &
-
-   𝕄𝕒𝕥𝕔𝕙 𝕋𝕠𝕜𝕖𝕟 𝕋𝕖𝕒𝕞
-
-*/
-
 contract Owner {
-   //will remove on production
     address public owner;
 
     constructor() public {
@@ -186,23 +187,27 @@ contract DecentralizedBet is Owner{
   using SafeMath for uint256;
   using SafeMath64 for uint64;
 
-  uint64 public MINIMUM_BET = 1000000;
   uint64 private constant PROVIDER_FEE = 300;
   uint64 private constant REFERRAL_FEE = 100;
   uint64 constant public DIVIDER = 10000;
   uint64 constant public DIVIDER_ODDS = 100;
   address public providerAddress = 0x6B993F7260650732ec227f35c18E6c8cD3427F90 ; 
   address public refereeAddress = 0x7FB91a344E21bD2f3fb24f38dE29Ec3584f2bD0E ; 
-  ITRC20 private trc20;
   address private constant matchContract = 0x2DD91DA413F2859F73350223b6247ac235668E17;
   mapping (uint64 => Order) internal orders;
   mapping (bytes32 => uint64[]) internal orderGroups;
 
   mapping(address => Reff) internal reffSystem;
+  mapping(uint64 => Token) internal allowedTokens;
 
+  struct Token{
+    IBEP20 bep20;
+    address _address;
+    uint256 _MINIMUM_BET;
+  }
   struct Reff{
     address referrer;
-    uint64 claimable;
+    uint256 claimable;
   }
   struct Order{
     bool makerClaimed;
@@ -215,11 +220,12 @@ contract DecentralizedBet is Owner{
     uint32 startTime;
     uint64 matchId;
     uint64 orderId;
-    uint64 makerPot; //uint256 for 18 decimal 
-    uint64 makerTotalPot; //uint256 for 18 decimal
-    uint64 takerPot; //uint256 for 18 decimal
+    uint256 makerPot; //uint256 for 18 decimal 
+    uint256 makerTotalPot; //uint256 for 18 decimal
+    uint256 takerPot; //uint256 for 18 decimal
     address makerSide;
     address takerSide;
+    uint64 tokenCode;
     //bytes32 orderGroupId;
 
     //on ONE_X_TWO
@@ -238,12 +244,13 @@ contract DecentralizedBet is Owner{
   
   constructor() public {
 
-    trc20 = ITRC20(matchContract);
+    addToken(matchContract,100,100 * (10 ** 18));
   }
 
   //log
-  event Claimed(address indexed user, uint64 orderId, uint64 amount);
+  event Claimed(address indexed user, uint64 orderId, uint256 amount);
   event OrderCreated(bytes32 _groupId, uint64 _matchId, uint64 _orderId,uint256 createdTime);
+  event MatchSettled(bytes32 _groupId);
   //event OrderMaker(address indexed maker);
 
 
@@ -284,22 +291,23 @@ contract DecentralizedBet is Owner{
   //5 betType
   //6 valueBetType
   //7 expiry time
-
+  //8 tokenCode
+  
   //taker uint256 takerParams
   //0 orderId
   //1 takerPot
 
   // orderId from referee signature
-  function createOrder(uint64[] memory makerParams,uint64 _orderId, bytes32 orderGroupId, uint64 _takerPot, bytes memory makerSignature,bytes memory refereeSignature,address referrer) public returns(bool){
+  bytes constant prefix = "\x19Ethereum Signed Message:\n32";
+  function createOrder(uint256[] memory makerParams,uint64 _orderId, bytes32 orderGroupId, uint256 _takerPot, bytes memory makerSignature,bytes memory refereeSignature,address referrer) public returns(bool){
 
     require(!isContract(msg.sender),"Contract is not allowed");
-    bytes memory prefix = "\x19TRON Signed Message:\n32";
-
-    require(makerParams.length == 8 , "Invalid makerParams");
+    require(makerParams.length == 9 , "Invalid makerParams");
+    require(allowedTokens[uint64(makerParams[8])]._address != address(0), "Invalid tokens");
     require(_orderId > 0 , "Invalid takerParams");
-    require(_takerPot >= MINIMUM_BET,"Raise your bet!");
-
-    bytes memory encoded = abi.encodePacked(prefix,makerParams);
+    require(_takerPot >= allowedTokens[uint64(makerParams[8])]._MINIMUM_BET,"Raise your bet!");
+    bytes32 hashed = keccak256(abi.encodePacked(makerParams));
+    bytes memory encoded = abi.encodePacked(prefix,hashed);
     address addrMaker = recoverAddress(encoded,makerSignature);
 
     //require(addrMaker == maker,"Invalid maker");
@@ -307,10 +315,10 @@ contract DecentralizedBet is Owner{
     Order storage order = orders[_orderId];
     require(order.orderId == 0 , "Duplicate Order ID");
 
-    order.matchId = makerParams[0];
+    order.matchId = uint64(makerParams[0]);
     order.odds = uint32(makerParams[1]);
     order.startTime = uint32(makerParams[2]);
-    order.makerTotalPot = makerParams[4];
+    order.makerTotalPot = uint64(makerParams[4]);
     order.betType = uint8(makerParams[5]);
     order.status = 99;
     order.valueBetType = uint16(makerParams[6]);
@@ -319,6 +327,7 @@ contract DecentralizedBet is Owner{
     order.makerSide = addrMaker;
     order.makerClaimed=false;
     order.takerClaimed=false;
+    order.tokenCode = uint64(makerParams[8]);
 
     require(block.timestamp<= makerParams[7],"Maker order Expired");
     require(block.timestamp < makerParams[2],"The match already started");
@@ -326,13 +335,13 @@ contract DecentralizedBet is Owner{
     require(order.odds > 100,"Minimum Odds 101");
 
     //require(memOrder.makerSide!= msg.sender,"Maker == Taker"); //maker != taker
-
-    encoded = abi.encodePacked(prefix,_orderId,orderGroupId,makerSignature);
+    hashed = keccak256(abi.encodePacked(_orderId,orderGroupId,makerSignature));
+    encoded = abi.encodePacked(prefix,hashed);
     require(recoverAddress(encoded,refereeSignature) == refereeAddress, "Invalid Referee");
     order.takerSide = msg.sender;
 
     emit OrderCreated(orderGroupId,order.matchId,order.orderId,block.timestamp);
-    uint64 makerTotalPotUsed = 0;
+    uint256 makerTotalPotUsed = 0;
     uint makerOrdersLength = orderGroups[orderGroupId].length;
     for(uint i=0 ; i < makerOrdersLength ; i++){
       uint64 loopOrderId = orderGroups[orderGroupId][i];
@@ -342,25 +351,25 @@ contract DecentralizedBet is Owner{
       makerTotalPotUsed = makerTotalPotUsed.add(orders[loopOrderId].makerPot);
     }
     order.makerTotalPot = order.makerTotalPot.sub(makerTotalPotUsed);
-    order.makerPot = uint64(order.odds).sub(100).mul(order.takerPot).div(100);
-    require(order.makerPot<order.makerTotalPot,"Maker Pot Limit Exceeded");
+    order.makerPot = uint256(order.odds).sub(100).mul(order.takerPot).div(100);
+    require(order.makerPot<=order.makerTotalPot,"Maker Pot Limit Exceeded");
 
+    IBEP20 bep20 = allowedTokens[order.tokenCode].bep20;
+    require(bep20.allowance(order.makerSide,address(this))>=order.makerPot,"insufficient maker allowance");
+    require(bep20.allowance(order.takerSide,address(this))>=order.takerPot,"insufficient taker allowance");
 
-    require(trc20.allowance(order.makerSide,address(this))>=order.makerPot,"insufficient maker allowance");
-    require(trc20.allowance(order.takerSide,address(this))>=order.takerPot,"insufficient taker allowance");
+    require(bep20.balanceOf(order.makerSide)>=order.makerPot,"insufficient maker balance");
+    require(bep20.balanceOf(order.takerSide)>=order.takerPot,"insufficient taker balance");
 
-    require(trc20.balanceOf(order.makerSide)>=order.makerPot,"insufficient maker balance");
-    require(trc20.balanceOf(order.takerSide)>=order.takerPot,"insufficient taker balance");
-
-    trc20.transferFrom(order.makerSide,address(this),order.makerPot);
-    trc20.transferFrom(order.takerSide,address(this),order.takerPot);
+    bep20.transferFrom(order.makerSide,address(this),order.makerPot);
+    bep20.transferFrom(order.takerSide,address(this),order.takerPot);
 
 
     order.status = 0;
     orderGroups[orderGroupId].push(order.orderId);
 
 
-    if(reffSystem[msg.sender].referrer == address(0)){
+    if(reffSystem[msg.sender].referrer == address(0) && order.tokenCode==100){
        if (referrer != providerAddress && referrer != msg.sender ){
         reffSystem[msg.sender].referrer = referrer;
       }
@@ -369,21 +378,22 @@ contract DecentralizedBet is Owner{
     return true;
   }
 
-  function getReffClaimable(address addr) public view returns(uint64){
+  function getReffClaimable(address addr) public view returns(uint256){
     return reffSystem[addr].claimable;
   }
 
   function claimReferralFee() public{
     require(reffSystem[msg.sender].claimable > 0,"");
-    uint64 claimable = reffSystem[msg.sender].claimable;
+   require(allowedTokens[100]._address != address(0), "Invalid tokens");
+    uint256 claimable = reffSystem[msg.sender].claimable;
     reffSystem[msg.sender].claimable =0;
-    trc20.transfer(msg.sender,claimable);
+    allowedTokens[100].bep20.transfer(msg.sender,claimable);
   
   }
 
   function getOrderById(uint64 orderId) public view returns(uint256[] memory){
      Order memory order = orders[orderId];
-     uint256[] memory rInt = new uint256[](16);
+     uint256[] memory rInt = new uint256[](17);
      rInt[0] = uint256(order.orderId);
      rInt[1] = uint256(order.matchId);
      rInt[2] = uint256(order.odds);
@@ -399,7 +409,13 @@ contract DecentralizedBet is Owner{
      rInt[13] = order.makerClaimed?1:0;
      rInt[14] = order.takerClaimed?1:0;
      rInt[15] = uint256(order.winner);
+     rInt[16] = uint256(order.tokenCode);
      return rInt;
+  }
+
+  function getAllowedTokens(uint64 codeToken) public view returns(address){
+ 
+    return allowedTokens[codeToken]._address;
   }
 
   function getOrderIdsByGroup(bytes32 groupId) public view returns(uint64[] memory){
@@ -408,45 +424,50 @@ contract DecentralizedBet is Owner{
 
   }
 
-  function claim(uint64 orderId) public returns(bool) {
+   function claim(uint64 orderId) public returns(bool) {
 
     require(!isContract(msg.sender),"Contract is not allowed");
-     Order storage order = orders[orderId];
-     require(order.status == 1 || order.status == 100,"Invalid Order");
-
+    Order storage order = orders[orderId];
+    require(order.status == 1 || order.status == 100,"Invalid Order");
+    require(allowedTokens[order.tokenCode]._address != address(0), "Invalid token");
+    IBEP20 bep20 = allowedTokens[order.tokenCode].bep20;
     if(order.status == 1){
       require(order.winner == 1 || order.winner == 2 ,"Invalid Winner");
       require(order.makerClaimed== false && order.takerClaimed == false,"Invalid Claim");
       if(order.winner == 1){
        require(order.makerSide == msg.sender,"Invalid Maker Side");
-        uint64 pot = order.takerPot;
-        uint64 fee = pot.mul(PROVIDER_FEE).div(DIVIDER);
+        uint256 pot = order.takerPot;
+        uint256 fee = 0;
+        if(allowedTokens[order.tokenCode]._address != matchContract)
+          fee = pot.mul(PROVIDER_FEE).div(DIVIDER);
         pot = pot.sub(fee).add(order.makerPot);
 
-        if(reffSystem[order.takerSide].referrer != address(0)){
-          uint64 rFee = fee.mul(REFERRAL_FEE).div(DIVIDER);
+        if(reffSystem[order.takerSide].referrer != address(0) && fee > 0){
+          uint256 rFee = fee.mul(REFERRAL_FEE).div(DIVIDER);
           fee = fee.sub(rFee);
           reffSystem[reffSystem[order.takerSide].referrer].claimable = reffSystem[reffSystem[order.takerSide].referrer].claimable.add(rFee);
         }
-        trc20.transfer(providerAddress,fee);
-        trc20.transfer(msg.sender,pot);
-        emit Claimed(msg.sender, orderId, pot);
+        bep20.transfer(providerAddress,fee);
+        bep20.transfer(msg.sender,pot);
+        emit Claimed(msg.sender, order.orderId, pot);
         order.makerClaimed=true;
         return true;
 
       }else if(order.winner == 2){
         require(order.takerSide == msg.sender,"Invalid Taker Side");
-        uint64 pot = order.makerPot;
-        uint64 fee = pot.mul(PROVIDER_FEE).div(DIVIDER);
+        uint256 pot = order.makerPot;
+        uint256 fee = 0;
+        if(allowedTokens[order.tokenCode]._address != matchContract)
+          fee = pot.mul(PROVIDER_FEE).div(DIVIDER);
         pot = pot.sub(fee).add(order.takerPot);
-        if(reffSystem[order.takerSide].referrer != address(0)){
-          uint64 rFee = fee.mul(REFERRAL_FEE).div(DIVIDER);
+        if(reffSystem[order.takerSide].referrer != address(0) && fee > 0){
+          uint256 rFee = fee.mul(REFERRAL_FEE).div(DIVIDER);
           fee = fee.sub(rFee);
           reffSystem[reffSystem[order.takerSide].referrer].claimable = reffSystem[reffSystem[order.takerSide].referrer].claimable.add(rFee);
         }
-        trc20.transfer(providerAddress,fee);
-        trc20.transfer(msg.sender,pot);
-        emit Claimed(msg.sender,orderId, pot);
+        bep20.transfer(providerAddress,fee);
+        bep20.transfer(msg.sender,pot);
+        emit Claimed(msg.sender,order.orderId, pot);
         order.takerClaimed=true;
         return true;
 
@@ -456,12 +477,14 @@ contract DecentralizedBet is Owner{
       require(order.winner == 100 ,"Invalid Winner");
       if(order.makerSide == msg.sender){
         require(order.makerClaimed == false ,"Invalid Maker Claim");
-        trc20.transfer(msg.sender,order.makerPot);
+        bep20.transfer(msg.sender,order.makerPot);
         order.makerClaimed = true;
+        emit Claimed(msg.sender,order.orderId, order.makerPot);
       }else if(order.takerSide == msg.sender){
         require(order.takerClaimed == false,"Invalid Taker Claim");
-        trc20.transfer(msg.sender,order.takerPot);
+        bep20.transfer(msg.sender,order.takerPot);
         order.takerClaimed = true;
+        emit Claimed(msg.sender,order.orderId, order.takerPot);
         return true;
       }
     }
@@ -485,7 +508,7 @@ contract DecentralizedBet is Owner{
 
       require(order.matchId>0,"invalid order");
       require(order.status == 0,"invalid order status");
-      require(order.startTime+7200 < block.timestamp, "not finished yet");
+      require(order.startTime+6300 < block.timestamp, "not finished yet"); //total 45 mins first half, 15 mins break, 45 mins second half 
       order.status = 1;
       if(winner){
           order.winner = 2;
@@ -495,10 +518,34 @@ contract DecentralizedBet is Owner{
       }
     }
     
-
+    emit MatchSettled(groupId);
     return length>0?true:false;
   }
 
+  function cancelByOrderGroup(bytes32 groupId) public{
+
+    uint256 length = orderGroups[groupId].length;
+
+    for(uint64 i = 0 ; i < length ; i ++){
+      Order storage order = orders[orderGroups[groupId][i]];
+       require(order.startTime>0,"Invalid Match");
+      uint256 currTime = block.timestamp-(24*3600); //24 hours waiting time. will be written in FAQ
+
+      require(order.status == 0 ,"Invalid Match");
+      require((msg.sender == order.takerSide) || (msg.sender == order.makerSide) || (msg.sender == refereeAddress),"You're not allowed to do this");
+
+      if(msg.sender == refereeAddress){
+        require(block.timestamp > order.startTime+14400,"Cancel Failed. Invalid Time (Ref)");
+      }else{
+          require(currTime > order.startTime+6300,"Cancel Failed. Invalid Time");
+      }
+       order.status = 100;
+       order.winner = 100;
+    }
+
+   
+  }
+  
   function cancel(uint64 _orderId) public{
 
     require(orders[_orderId].startTime>0,"Invalid Match");
@@ -511,15 +558,20 @@ contract DecentralizedBet is Owner{
     if(msg.sender == refereeAddress){
       require(block.timestamp > _order.startTime+14400,"Cancel Failed. Invalid Time (Ref)");
     }else{
-          require(currTime > _order.startTime+7200,"Cancel Failed. Invalid Time");
+          require(currTime > _order.startTime+6300,"Cancel Failed. Invalid Time");
     }
      _order.status = 100;
      _order.winner = 100;
   }
 
+  function addToken(address token,uint64 code,uint256 minimumBet) public onlyOwner{
+    allowedTokens[code]._address = token;
+    allowedTokens[code].bep20 = IBEP20(allowedTokens[code]._address);
+    allowedTokens[code]._MINIMUM_BET = minimumBet;
+  }
 
-  function setMinimumBet(uint64 _MINIMUM_BET) public onlyOwner {
-      MINIMUM_BET = _MINIMUM_BET;
+  function removeToken(uint64 code)public onlyOwner{
+    allowedTokens[code]._address = address(0);
   }
 
   function setReferee(address _refereeAddress) public onlyOwner{
@@ -528,14 +580,6 @@ contract DecentralizedBet is Owner{
 
    function setProviderAddress(address _providerAddress) public onlyOwner{
     providerAddress = _providerAddress;
-  }
-  // will remove on production
-  function flush() public onlyOwner {
-      trc20.transfer(refereeAddress,trc20.balanceOf(address(this)));
-      uint bal = address(this).balance;
-      msg.sender.transfer(bal);
-
-        
   }
 
 }
